@@ -1,0 +1,31 @@
+[package]
+name = "spec_engine_mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# 依赖核心解析库
+spec-engine = { git = "https://github.com/zerojacks/spec-engine.git", package = "spec-engine" }
+spec-compiler = { git = "https://github.com/zerojacks/spec-engine.git", package = "spec-compiler" }
+
+# MCP 服务器框架
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+hex = "0.4"
+
+# YAML 支持
+serde_yaml = "0.9"
+
+# 文件系统和临时文件
+tempfile = "3"
+dirs = "5"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "spec-engine-mcp"
+path = "src/main.rs"
