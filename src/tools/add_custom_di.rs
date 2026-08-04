@@ -245,9 +245,14 @@ fn validate_with_compiler(grouped: &HashMap<String, Vec<DiDefinition>>) -> Resul
         let temp_dir = TempDir::new()
             .context("Failed to create temporary directory")?;
 
-        // Create protocol YAML file
+        // Create protocol subdirectory (spec-compiler requires this)
+        let protocol_dir = temp_dir.path().join(protocol);
+        std::fs::create_dir_all(&protocol_dir)
+            .context("Failed to create protocol subdirectory")?;
+
+        // Create protocol YAML file in the subdirectory
         let protocol_yaml = create_protocol_yaml(protocol, protocol_dis)?;
-        let temp_file = temp_dir.path().join("test.yaml");
+        let temp_file = protocol_dir.join("test.yaml");
         std::fs::write(&temp_file, protocol_yaml)
             .context("Failed to write temporary YAML file")?;
 

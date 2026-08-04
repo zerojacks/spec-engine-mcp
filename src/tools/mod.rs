@@ -8,4 +8,4 @@ pub use parse_data_item::parse_data_item;
 pub use lookup_di::lookup_di;
 pub use list_protocols::list_protocols;
 pub use search_di::search_di;
-pub use add_custom_di::add_custom_di;
+pub use add_custom_di::{add_custom_di, AddCustomDiInput, AddCustomDiOutput};
