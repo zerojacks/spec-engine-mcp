@@ -4,7 +4,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
-use spec_engine::{create_dynamic_catalog, DynamicCatalog};
+use spec_engine::DynamicCatalog;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -94,7 +94,7 @@ pub struct DiDefinition {
 // ============================================================================
 
 /// Main entry point for adding custom DI definitions
-pub fn add_custom_di(input: AddCustomDiInput) -> Result<AddCustomDiOutput> {
+pub fn add_custom_di(catalog: &spec_engine::DynamicCatalog, input: AddCustomDiInput) -> Result<AddCustomDiOutput> {
     // 1. Parse YAML array
     let dis = parse_di_array(&input.yaml_content)?;
 
@@ -108,8 +108,7 @@ pub fn add_custom_di(input: AddCustomDiInput) -> Result<AddCustomDiOutput> {
     validate_with_compiler(&grouped)?;
 
     // 5. Check conflicts
-    let catalog = create_dynamic_catalog();
-    let conflicts = check_conflicts(&grouped, &catalog)?;
+    let conflicts = check_conflicts(&grouped, catalog)?;
 
     if !conflicts.is_empty() && !input.force {
         return Ok(create_conflict_output(conflicts));
@@ -337,23 +336,23 @@ fn check_conflicts(
 // ============================================================================
 
 /// Get user_def directory path
+/// Priority order:
+/// 1. Environment variable SPEC_ENGINE_USER_DEF_PATH
+/// 2. Global config directory (recommended for MCP): ~/.config/spec-engine-mcp/user_def (Linux/Mac) or %APPDATA%\spec-engine-mcp\user_def (Windows)
+/// 3. Current working directory: ./user_def (fallback)
 fn get_user_def_path() -> PathBuf {
     // 1. Check environment variable
     if let Ok(path) = std::env::var("SPEC_ENGINE_USER_DEF_PATH") {
         return PathBuf::from(path);
     }
 
-    // 2. Use workspace path
-    let workspace_path = PathBuf::from("./user_def");
-    if workspace_path.exists() || std::env::current_dir().is_ok() {
-        return workspace_path;
+    // 2. Use global config directory (recommended for MCP servers)
+    if let Some(config_dir) = dirs::config_dir() {
+        return config_dir.join("spec-engine-mcp").join("user_def");
     }
 
-    // 3. Use global config directory
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("spec-engine-mcp")
-        .join("user_def")
+    // 3. Fallback to current working directory
+    PathBuf::from("./user_def")
 }
 
 /// Write DI definitions to user_def files
@@ -371,7 +370,12 @@ fn write_to_files(
     let mut files_written = HashMap::new();
 
     for (protocol, new_dis) in grouped {
-        let file_path = user_def_dir.join(format!("{}.yaml", protocol));
+        // 文件必须放在协议子目录下
+        let protocol_dir = user_def_dir.join(protocol);
+        std::fs::create_dir_all(&protocol_dir)
+            .with_context(|| format!("Failed to create protocol directory: {}", protocol_dir.display()))?;
+        
+        let file_path = protocol_dir.join(format!("{}.yaml", protocol));
 
         // Read existing definitions if file exists
         let mut existing_dis = if file_path.exists() {
@@ -520,9 +524,14 @@ fn create_dry_run_output(
     let total_count: usize = grouped.values().map(|v| v.len()).sum();
     let di_count: HashMap<String, usize> = grouped.iter().map(|(k, v)| (k.clone(), v.len())).collect();
 
+    let user_def_dir = get_user_def_path();
     let files_would_write: HashMap<String, String> = grouped
         .keys()
-        .map(|protocol| (protocol.clone(), format!("user_def/{}.yaml", protocol)))
+        .map(|protocol| {
+            let protocol_dir = user_def_dir.join(protocol);
+            let path = protocol_dir.join(format!("{}.yaml", protocol));
+            (protocol.clone(), path.to_string_lossy().to_string())
+        })
         .collect();
 
     let message = if conflicts.is_empty() {

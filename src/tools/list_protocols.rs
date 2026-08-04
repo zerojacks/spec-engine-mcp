@@ -1,7 +1,5 @@
 use anyhow::Result;
 use serde::Serialize;
-use spec_engine::get_spec_catalog;
-use std::collections::HashSet;
 
 #[derive(Debug, Serialize)]
 pub struct ListProtocolsOutput {
@@ -23,36 +21,26 @@ pub struct ProtocolInfo {
 
 /// 列出所有支持的协议
 ///
+/// # 参数
+/// - catalog: DynamicCatalog 引用
+///
 /// # 返回
 /// 协议列表，包括每个协议的DI数量和支持的区域
-pub fn list_protocols() -> Result<ListProtocolsOutput> {
-    let catalog = get_spec_catalog();
+pub fn list_protocols(catalog: &spec_engine::DynamicCatalog) -> Result<ListProtocolsOutput> {
+    // 使用 DynamicCatalog 的新方法
+    let protocol_names = catalog.list_protocols();
     
-    // 按协议分组统计
-    let mut protocol_map: std::collections::HashMap<String, (HashSet<u32>, HashSet<String>)> = 
-        std::collections::HashMap::new();
-
-    for ((protocol, di, region, _dir), _field) in catalog.iter() {
-        let entry = protocol_map.entry(protocol.clone()).or_insert_with(|| {
-            (HashSet::new(), HashSet::new())
+    let mut protocols = Vec::new();
+    for protocol_name in protocol_names {
+        let dis = catalog.list_dis_for_protocol(&protocol_name);
+        let regions = catalog.list_regions_for_protocol(&protocol_name);
+        
+        protocols.push(ProtocolInfo {
+            name: protocol_name,
+            di_count: dis.len(),
+            regions,
         });
-        entry.0.insert(*di);
-        entry.1.insert(region.clone());
     }
-
-    let mut protocols: Vec<ProtocolInfo> = protocol_map
-        .into_iter()
-        .map(|(name, (dis, regions))| {
-            let mut regions_vec: Vec<String> = regions.into_iter().collect();
-            regions_vec.sort();
-            
-            ProtocolInfo {
-                name,
-                di_count: dis.len(),
-                regions: regions_vec,
-            }
-        })
-        .collect();
 
     protocols.sort_by(|a, b| a.name.cmp(&b.name));
     let total = protocols.len();

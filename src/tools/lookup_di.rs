@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use spec_engine::{get_spec_catalog, DEFAULT_REGION};
+use spec_engine::DEFAULT_REGION;
 
 #[derive(Debug, Deserialize)]
 pub struct LookupDiInput {
@@ -64,39 +64,19 @@ pub struct SchemaDocs {
 /// 查询DI定义信息
 ///
 /// # 输入参数
-/// - protocol: 协议类型
-/// - di: DI码（十六进制字符串）
-/// - region: 可选的省份/区域代码
-/// - direction: 可选的方向（上行/下行）
+/// - catalog: DynamicCatalog 引用
+/// - input: 查询参数
 ///
 /// # 返回
 /// DI的定义信息（名称、结构等）
-pub fn lookup_di(input: LookupDiInput) -> Result<LookupDiOutput> {
+pub fn lookup_di(catalog: &spec_engine::DynamicCatalog, input: LookupDiInput) -> Result<LookupDiOutput> {
     let di_code = u32::from_str_radix(&input.di, 16)
         .context("DI码格式错误，应为十六进制字符串")?;
 
     let region = input.region.as_deref().unwrap_or(DEFAULT_REGION);
-    let catalog = get_spec_catalog();
 
-    // 尝试查找：优先精确匹配，然后回退到通用定义
-    let key = (
-        input.protocol.clone(),
-        di_code,
-        region.to_string(),
-        input.direction.clone(),
-    );
-
-    let named_field = catalog.get(&key).or_else(|| {
-        // 回退到DEFAULT_REGION
-        catalog.get(&(
-            input.protocol.clone(),
-            di_code,
-            DEFAULT_REGION.to_string(),
-            input.direction.clone(),
-        ))
-    });
-
-    match named_field {
+    // Try to lookup in catalog
+    match catalog.lookup(&input.protocol, di_code, region, input.direction.as_deref()) {
         Some(field) => {
             // 直接使用 serde 序列化，无需手写转换函数
             let structure = serde_json::to_value(&field.spec)

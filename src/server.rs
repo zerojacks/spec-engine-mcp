@@ -1,12 +1,19 @@
 use anyhow::Result;
 use serde_json::{json, Value as JsonValue};
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use tracing::{debug, error, info};
 
 use crate::tools;
+use spec_engine::DynamicCatalog;
+
+/// 全局 Catalog（线程安全）
+type SharedCatalog = Arc<RwLock<DynamicCatalog>>;
 
 /// MCP协议消息
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
 struct McpRequest {
     jsonrpc: String,
     #[serde(default)]
@@ -40,14 +47,92 @@ struct McpError {
 pub struct McpServer {
     stdin: std::io::Stdin,
     stdout: std::io::Stdout,
+    catalog: SharedCatalog,
 }
 
 impl McpServer {
     pub fn new() -> Self {
+        // 创建全局 catalog
+        let catalog = Self::create_catalog();
+        
         Self {
             stdin: std::io::stdin(),
             stdout: std::io::stdout(),
+            catalog,
         }
+    }
+
+    /// 创建并初始化 Catalog
+    fn create_catalog() -> SharedCatalog {
+        use spec_engine::create_dynamic_catalog;
+
+        let mut catalog = create_dynamic_catalog();
+
+        // 加载 user_def 目录（如果存在且非空）
+        let user_def_path = Self::get_user_def_path();
+        if user_def_path.exists() {
+            // 检查是否有协议子目录
+            if let Ok(entries) = std::fs::read_dir(&user_def_path) {
+                let has_subdirs = entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().is_dir());
+                
+                if has_subdirs {
+                    info!("加载用户自定义字典: {}", user_def_path.display());
+                    match catalog.load_yaml_dir("user_def".to_string(), &user_def_path) {
+                        Ok(_) => {
+                            info!("✓ 用户自定义字典加载成功");
+                        }
+                        Err(e) => {
+                            error!("✗ 用户自定义字典加载失败: {}", e);
+                        }
+                    }
+                } else {
+                    debug!("用户自定义字典目录为空，跳过加载: {}", user_def_path.display());
+                }
+            }
+        } else {
+            debug!("用户自定义字典目录不存在，跳过加载: {}", user_def_path.display());
+        }
+
+        Arc::new(RwLock::new(catalog))
+    }
+
+    /// 获取 user_def 目录路径
+    fn get_user_def_path() -> PathBuf {
+        // 1. 环境变量
+        if let Ok(path) = std::env::var("SPEC_ENGINE_USER_DEF_PATH") {
+            return PathBuf::from(path);
+        }
+
+        // 2. 全局配置目录
+        if let Some(config_dir) = dirs::config_dir() {
+            return config_dir.join("spec-engine-mcp").join("user_def");
+        }
+
+        // 3. 当前目录
+        PathBuf::from("./user_def")
+    }
+
+    /// 重新加载 user_def 目录
+    pub fn reload_user_def(&self) -> Result<()> {
+        let user_def_path = Self::get_user_def_path();
+        
+        if !user_def_path.exists() {
+            return Ok(()); // 目录不存在，跳过
+        }
+
+        let mut catalog = self.catalog.write().unwrap();
+        
+        // 卸载旧的 user_def 层
+        let _ = catalog.unload_layer("user_def");
+        
+        // 重新加载
+        catalog.load_yaml_dir("user_def".to_string(), &user_def_path)
+            .map_err(|e| anyhow::anyhow!("重新加载 user_def 失败: {}", e))?;
+        
+        info!("✓ 用户自定义字典已重新加载");
+        Ok(())
     }
 
     /// 运行MCP服务器（stdio模式）
@@ -264,6 +349,9 @@ impl McpServer {
         
         let arguments = params["arguments"].clone();
 
+        // 获取 catalog 的读锁
+        let catalog = self.catalog.read().unwrap();
+
         let result = match tool_name {
             "parse_data_item" => {
                 let input = serde_json::from_value(arguments)?;
@@ -272,21 +360,34 @@ impl McpServer {
             }
             "lookup_di" => {
                 let input = serde_json::from_value(arguments)?;
-                let output = tools::lookup_di(input)?;
+                let output = tools::lookup_di(&catalog, input)?;
                 serde_json::to_value(output)?
             }
             "list_protocols" => {
-                let output = tools::list_protocols()?;
+                let output = tools::list_protocols(&catalog)?;
                 serde_json::to_value(output)?
             }
             "search_di" => {
                 let input = serde_json::from_value(arguments)?;
-                let output = tools::search_di(input)?;
+                let output = tools::search_di(&catalog, input)?;
                 serde_json::to_value(output)?
             }
             "add_custom_di" => {
+                drop(catalog); // 释放读锁
                 let input = serde_json::from_value(arguments)?;
-                let output = tools::add_custom_di(input)?;
+                
+                // 获取写锁来检查冲突
+                let catalog_read = self.catalog.read().unwrap();
+                let output = tools::add_custom_di(&catalog_read, input)?;
+                drop(catalog_read);
+                
+                // 如果写入成功且不是 dry_run，重新加载 user_def
+                if output.success && output.action == "added" || output.action == "added_with_overwrites" {
+                    if let Err(e) = self.reload_user_def() {
+                        error!("重新加载 user_def 失败: {}", e);
+                    }
+                }
+                
                 serde_json::to_value(output)?
             }
             _ => {

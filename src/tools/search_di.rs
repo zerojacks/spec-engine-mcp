@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use spec_engine::{get_spec_catalog, DEFAULT_REGION};
+use spec_engine::DEFAULT_REGION;
 
 #[derive(Debug, Deserialize)]
 pub struct SearchDiInput {
@@ -46,21 +46,18 @@ pub struct DiSearchResult {
 /// 搜索DI定义
 ///
 /// # 输入参数
-/// - keyword: 搜索关键词（匹配DI名称）
-/// - protocol: 可选的协议过滤
-/// - region: 可选的区域过滤
-/// - limit: 最大返回结果数量
+/// - catalog: DynamicCatalog 引用
+/// - input: 搜索参数
 ///
 /// # 返回
 /// 匹配的DI列表
-pub fn search_di(input: SearchDiInput) -> Result<SearchDiOutput> {
-    let catalog = get_spec_catalog();
+pub fn search_di(catalog: &spec_engine::DynamicCatalog, input: SearchDiInput) -> Result<SearchDiOutput> {
     let keyword_lower = input.keyword.to_lowercase();
 
     let mut results = Vec::new();
     let mut total_matches = 0;
 
-    for ((protocol, di, region, _dir), field) in catalog.iter() {
+    for ((protocol, di, region, _dir), field) in catalog.iter_all() {
         // 应用过滤条件
         if let Some(ref proto_filter) = input.protocol {
             if protocol != proto_filter {
