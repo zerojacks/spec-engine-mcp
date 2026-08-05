@@ -22,27 +22,23 @@ pub struct ProtocolInfo {
 /// 列出所有支持的协议
 ///
 /// # 参数
-/// - catalog: DynamicCatalog 引用
+/// - engine: Engine 引用
 ///
 /// # 返回
 /// 协议列表，包括每个协议的DI数量和支持的区域
-pub fn list_protocols(catalog: &spec_engine::DynamicCatalog) -> Result<ListProtocolsOutput> {
-    // 使用 DynamicCatalog 的新方法
-    let protocol_names = catalog.list_protocols();
+pub fn list_protocols(engine: &spec_engine::Engine) -> Result<ListProtocolsOutput> {
+    // 使用 Engine 的新方法
+    let protocol_infos = engine.list_protocols();
     
-    let mut protocols = Vec::new();
-    for protocol_name in protocol_names {
-        let dis = catalog.list_dis_for_protocol(&protocol_name);
-        let regions = catalog.list_regions_for_protocol(&protocol_name);
-        
-        protocols.push(ProtocolInfo {
-            name: protocol_name,
-            di_count: dis.len(),
+    let protocols: Vec<ProtocolInfo> = protocol_infos
+        .into_iter()
+        .map(|(name, di_count, regions)| ProtocolInfo {
+            name,
+            di_count,
             regions,
-        });
-    }
+        })
+        .collect();
 
-    protocols.sort_by(|a, b| a.name.cmp(&b.name));
     let total = protocols.len();
 
     Ok(ListProtocolsOutput { protocols, total })

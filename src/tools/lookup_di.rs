@@ -64,19 +64,19 @@ pub struct SchemaDocs {
 /// 查询DI定义信息
 ///
 /// # 输入参数
-/// - catalog: DynamicCatalog 引用
+/// - engine: Engine 引用
 /// - input: 查询参数
 ///
 /// # 返回
 /// DI的定义信息（名称、结构等）
-pub fn lookup_di(catalog: &spec_engine::DynamicCatalog, input: LookupDiInput) -> Result<LookupDiOutput> {
+pub fn lookup_di(engine: &spec_engine::Engine, input: LookupDiInput) -> Result<LookupDiOutput> {
     let di_code = u32::from_str_radix(&input.di, 16)
         .context("DI码格式错误，应为十六进制字符串")?;
 
     let region = input.region.as_deref().unwrap_or(DEFAULT_REGION);
 
-    // Try to lookup in catalog
-    match catalog.lookup(&input.protocol, di_code, region, input.direction.as_deref()) {
+    // Try to lookup in engine
+    match engine.lookup(&input.protocol, di_code, region, input.direction.as_deref()) {
         Some(field) => {
             // 直接使用 serde 序列化，无需手写转换函数
             let structure = serde_json::to_value(&field.spec)

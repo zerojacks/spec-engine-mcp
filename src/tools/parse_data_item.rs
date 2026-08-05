@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use spec_engine::{parse_di, Value, DEFAULT_REGION};
+use spec_engine::{Engine, Value, DEFAULT_REGION};
 
 #[derive(Debug, Deserialize)]
 pub struct ParseDataItemInput {
@@ -38,6 +38,7 @@ pub struct ParseDataItemOutput {
 /// 根据DI码定义，解析对应的数据项内容（hex_data）
 ///
 /// # 输入参数
+/// - engine: Engine 实例引用
 /// - protocol: 协议类型（dlt645-2007, csg13, csg16等）
 /// - di: DI码（数据标识，十六进制字符串）
 /// - hex_data: 数据项内容（十六进制字符串）
@@ -46,7 +47,7 @@ pub struct ParseDataItemOutput {
 ///
 /// # 返回
 /// 解析后的JSON结构
-pub fn parse_data_item(input: ParseDataItemInput) -> Result<ParseDataItemOutput> {
+pub fn parse_data_item(engine: &Engine, input: ParseDataItemInput) -> Result<ParseDataItemOutput> {
     // 解析DI码
     let di_code = u32::from_str_radix(&input.di, 16)
         .context("DI码格式错误，应为十六进制字符串")?;
@@ -59,7 +60,7 @@ pub fn parse_data_item(input: ParseDataItemInput) -> Result<ParseDataItemOutput>
     let region = input.region.as_deref().unwrap_or(DEFAULT_REGION);
 
     // 调用解析函数
-    match parse_di(&input.protocol, di_code, region, input.dir.as_deref(), &raw_data) {
+    match engine.parse(&input.protocol, di_code, region, input.dir.as_deref(), &raw_data) {
         Ok((value, consumed)) => {
             let json_value = value_to_json(&value)?;
             Ok(ParseDataItemOutput {

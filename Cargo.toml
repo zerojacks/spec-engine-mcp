@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 # 依赖核心解析库
-spec-engine = { git = "https://github.com/zerojacks/spec-engine.git", package = "spec-engine" }
-spec-compiler = { git = "https://github.com/zerojacks/spec-engine.git", package = "spec-compiler" }
+spec-engine = { path = "../spec-engine/spec-engine" }
+spec-compiler = { path = "../spec-engine/spec-compiler" }
 
 # MCP 服务器框架
 tokio = { version = "1", features = ["full"] }

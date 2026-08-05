@@ -1,6 +1,5 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use spec_engine::DEFAULT_REGION;
 
 #[derive(Debug, Deserialize)]
 pub struct SearchDiInput {
@@ -46,53 +45,36 @@ pub struct DiSearchResult {
 /// 搜索DI定义
 ///
 /// # 输入参数
-/// - catalog: DynamicCatalog 引用
+/// - engine: Engine 引用
 /// - input: 搜索参数
 ///
 /// # 返回
 /// 匹配的DI列表
-pub fn search_di(catalog: &spec_engine::DynamicCatalog, input: SearchDiInput) -> Result<SearchDiOutput> {
-    let keyword_lower = input.keyword.to_lowercase();
+pub fn search_di(engine: &spec_engine::Engine, input: SearchDiInput) -> Result<SearchDiOutput> {
+    // 使用 Engine 的搜索方法
+    let search_results = engine.search_di(
+        &input.keyword,
+        input.protocol.as_deref(),
+        input.region.as_deref(),
+        input.limit + 1, // 多取一个来判断是否有更多结果
+    );
 
-    let mut results = Vec::new();
-    let mut total_matches = 0;
-
-    for ((protocol, di, region, _dir), field) in catalog.iter_all() {
-        // 应用过滤条件
-        if let Some(ref proto_filter) = input.protocol {
-            if protocol != proto_filter {
-                continue;
-            }
-        }
-
-        if let Some(ref region_filter) = input.region {
-            if region != region_filter && region != DEFAULT_REGION {
-                continue;
-            }
-        }
-
-        // 关键词匹配（不区分大小写）
-        let name_lower = field.name.to_lowercase();
-        if name_lower.contains(&keyword_lower) {
-            total_matches += 1;
-
-            if results.len() < input.limit {
-                results.push(DiSearchResult {
-                    di: format!("{:08X}", di),
-                    name: field.name.clone(),
-                    protocol: protocol.clone(),
-                    region: region.clone(),
-                });
-            }
-        }
-    }
-
-    // 按DI码排序
-    results.sort_by(|a, b| a.di.cmp(&b.di));
+    let has_more = search_results.len() > input.limit;
+    
+    let results: Vec<DiSearchResult> = search_results
+        .into_iter()
+        .take(input.limit)
+        .map(|(protocol, di, region, name)| DiSearchResult {
+            di: format!("{:08X}", di),
+            name,
+            protocol,
+            region,
+        })
+        .collect();
 
     Ok(SearchDiOutput {
         count: results.len(),
-        has_more: total_matches > results.len(),
+        has_more,
         results,
     })
 }

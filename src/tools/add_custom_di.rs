@@ -4,7 +4,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
-use spec_engine::DynamicCatalog;
+use spec_engine::Engine;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -94,7 +94,7 @@ pub struct DiDefinition {
 // ============================================================================
 
 /// Main entry point for adding custom DI definitions
-pub fn add_custom_di(catalog: &spec_engine::DynamicCatalog, input: AddCustomDiInput) -> Result<AddCustomDiOutput> {
+pub fn add_custom_di(engine: &spec_engine::Engine, input: AddCustomDiInput) -> Result<AddCustomDiOutput> {
     // 1. Parse YAML array
     let dis = parse_di_array(&input.yaml_content)?;
 
@@ -108,7 +108,7 @@ pub fn add_custom_di(catalog: &spec_engine::DynamicCatalog, input: AddCustomDiIn
     validate_with_compiler(&grouped)?;
 
     // 5. Check conflicts
-    let conflicts = check_conflicts(&grouped, catalog)?;
+    let conflicts = check_conflicts(&grouped, engine)?;
 
     if !conflicts.is_empty() && !input.force {
         return Ok(create_conflict_output(conflicts));
@@ -296,7 +296,7 @@ fn create_protocol_yaml(protocol: &str, dis: &[DiDefinition]) -> Result<String> 
 /// Check for conflicts with existing DI definitions
 fn check_conflicts(
     grouped: &HashMap<String, Vec<DiDefinition>>,
-    catalog: &DynamicCatalog,
+    engine: &Engine,
 ) -> Result<Vec<DiConflict>> {
     let mut conflicts = Vec::new();
     let default_regions = vec![DEFAULT_REGION.to_string()];
@@ -314,8 +314,8 @@ fn check_conflicts(
                 .unwrap_or(&default_regions);
 
             for region in regions {
-                // Look up in catalog
-                if let Some(existing) = catalog.lookup(protocol, di_code, region, None) {
+                // Look up in engine
+                if let Some(existing) = engine.lookup(protocol, di_code, region, None) {
                     conflicts.push(DiConflict {
                         di_id: di.id.clone(),
                         protocol: protocol.clone(),

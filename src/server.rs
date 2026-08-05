@@ -6,10 +6,10 @@ use std::sync::{Arc, RwLock};
 use tracing::{debug, error, info};
 
 use crate::tools;
-use spec_engine::DynamicCatalog;
+use spec_engine::{Engine, Layer};
 
-/// 全局 Catalog（线程安全）
-type SharedCatalog = Arc<RwLock<DynamicCatalog>>;
+/// 全局 Engine（线程安全，支持热更新）
+type SharedEngine = Arc<RwLock<Engine>>;
 
 /// MCP协议消息
 #[derive(Debug, serde::Deserialize)]
@@ -47,30 +47,27 @@ struct McpError {
 pub struct McpServer {
     stdin: std::io::Stdin,
     stdout: std::io::Stdout,
-    catalog: SharedCatalog,
+    engine: SharedEngine,
 }
 
 impl McpServer {
     pub fn new() -> Self {
-        // 创建全局 catalog
-        let catalog = Self::create_catalog();
+        // 创建全局 Engine
+        let engine = Self::create_engine();
         
         Self {
             stdin: std::io::stdin(),
             stdout: std::io::stdout(),
-            catalog,
+            engine,
         }
     }
 
-    /// 创建并初始化 Catalog
-    fn create_catalog() -> SharedCatalog {
-        use spec_engine::create_dynamic_catalog;
-
-        let mut catalog = create_dynamic_catalog();
-
+    /// 创建并初始化 Engine
+    fn create_engine() -> SharedEngine {
         // 加载 user_def 目录（如果存在且非空）
         let user_def_path = Self::get_user_def_path();
-        if user_def_path.exists() {
+        
+        let layers = if user_def_path.exists() {
             // 检查是否有协议子目录
             if let Ok(entries) = std::fs::read_dir(&user_def_path) {
                 let has_subdirs = entries
@@ -79,23 +76,35 @@ impl McpServer {
                 
                 if has_subdirs {
                     info!("加载用户自定义字典: {}", user_def_path.display());
-                    match catalog.load_yaml_dir("user_def".to_string(), &user_def_path) {
-                        Ok(_) => {
+                    match Layer::from_yaml_dir("user_def".to_string(), &user_def_path) {
+                        Ok(layer) => {
                             info!("✓ 用户自定义字典加载成功");
+                            vec![layer]
                         }
                         Err(e) => {
                             error!("✗ 用户自定义字典加载失败: {}", e);
+                            Vec::new()
                         }
                     }
                 } else {
                     debug!("用户自定义字典目录为空，跳过加载: {}", user_def_path.display());
+                    Vec::new()
                 }
+            } else {
+                Vec::new()
             }
         } else {
             debug!("用户自定义字典目录不存在，跳过加载: {}", user_def_path.display());
-        }
+            Vec::new()
+        };
 
-        Arc::new(RwLock::new(catalog))
+        let engine = if layers.is_empty() {
+            Engine::new_default()
+        } else {
+            Engine::with_layers(layers)
+        };
+
+        Arc::new(RwLock::new(engine))
     }
 
     /// 获取 user_def 目录路径
@@ -122,14 +131,19 @@ impl McpServer {
             return Ok(()); // 目录不存在，跳过
         }
 
-        let mut catalog = self.catalog.write().unwrap();
+        // 重新创建 Engine（包含新的 user_def 层）
+        let layers = match Layer::from_yaml_dir("user_def".to_string(), &user_def_path) {
+            Ok(layer) => vec![layer],
+            Err(e) => {
+                return Err(anyhow::anyhow!("重新加载 user_def 失败: {}", e));
+            }
+        };
+
+        let new_engine = Engine::with_layers(layers);
         
-        // 卸载旧的 user_def 层
-        let _ = catalog.unload_layer("user_def");
-        
-        // 重新加载
-        catalog.load_yaml_dir("user_def".to_string(), &user_def_path)
-            .map_err(|e| anyhow::anyhow!("重新加载 user_def 失败: {}", e))?;
+        // 原子替换
+        let mut engine = self.engine.write().unwrap();
+        *engine = new_engine;
         
         info!("✓ 用户自定义字典已重新加载");
         Ok(())
@@ -349,40 +363,40 @@ impl McpServer {
         
         let arguments = params["arguments"].clone();
 
-        // 获取 catalog 的读锁
-        let catalog = self.catalog.read().unwrap();
+        // 获取 engine 的读锁
+        let engine = self.engine.read().unwrap();
 
         let result = match tool_name {
             "parse_data_item" => {
                 let input = serde_json::from_value(arguments)?;
-                let output = tools::parse_data_item(input)?;
+                let output = tools::parse_data_item(&engine, input)?;
                 serde_json::to_value(output)?
             }
             "lookup_di" => {
                 let input = serde_json::from_value(arguments)?;
-                let output = tools::lookup_di(&catalog, input)?;
+                let output = tools::lookup_di(&engine, input)?;
                 serde_json::to_value(output)?
             }
             "list_protocols" => {
-                let output = tools::list_protocols(&catalog)?;
+                let output = tools::list_protocols(&engine)?;
                 serde_json::to_value(output)?
             }
             "search_di" => {
                 let input = serde_json::from_value(arguments)?;
-                let output = tools::search_di(&catalog, input)?;
+                let output = tools::search_di(&engine, input)?;
                 serde_json::to_value(output)?
             }
             "add_custom_di" => {
-                drop(catalog); // 释放读锁
+                drop(engine); // 释放读锁
                 let input = serde_json::from_value(arguments)?;
                 
-                // 获取写锁来检查冲突
-                let catalog_read = self.catalog.read().unwrap();
-                let output = tools::add_custom_di(&catalog_read, input)?;
-                drop(catalog_read);
+                // 获取读锁来检查冲突
+                let engine_read = self.engine.read().unwrap();
+                let output = tools::add_custom_di(&engine_read, input)?;
+                drop(engine_read);
                 
                 // 如果写入成功且不是 dry_run，重新加载 user_def
-                if output.success && output.action == "added" || output.action == "added_with_overwrites" {
+                if output.success && (output.action == "added" || output.action == "added_with_overwrites") {
                     if let Err(e) = self.reload_user_def() {
                         error!("重新加载 user_def 失败: {}", e);
                     }
